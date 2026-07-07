@@ -92,6 +92,16 @@ class Asteroid:
         self.rotation = random.uniform(0, 360)
         self.rot_speed = random.uniform(-2, 2) * speed_mult
 
+        # Eixo de rotação 3D aleatório (vetor unitário)
+        axis_angle = random.uniform(0, 2 * math.pi)
+        axis_z = random.uniform(-1.0, 1.0)
+        axis_r = math.sqrt(1.0 - axis_z * axis_z)
+        self.rot_axis = (
+            math.cos(axis_angle) * axis_r,
+            math.sin(axis_angle) * axis_r,
+            axis_z,
+        )
+
         # Raio de colisão (85% do raio visual pra dar folga)
         self.base_radius = size * 20
         self.radius = self.base_radius * 0.85
@@ -132,31 +142,62 @@ class Asteroid:
             self.y = -100
 
     def draw(self):
-        """Desenha o asteroide em 2 passos:
-        1. Preenchimento escuro com iluminação (GL_POLYGON) — corpo 3D
-        2. Contorno neon colorido sem iluminação (GL_LINE_LOOP) — wireframe TRON"""
+        """Desenha asteroide 3D extrudado:
+        1. Face frontal e traseira com normais em Z
+        2. Faces laterais (quads) conectando frente e trás
+        3. Wireframe neon na face frontal
+        Espessura proporcional ao base_radius (30%)."""
         glPushMatrix()
         glTranslatef(self.x, self.y, 0.0)
-        glRotatef(self.rotation, 0, 0, 1)
+        glRotatef(self.rotation, *self.rot_axis)
 
-        # Corpo preenchido (reage à luz)
+        thickness = self.base_radius * 0.3
+        n = len(self.vertices)
+
+        # Material rochoso escuro com brilho especular
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, [0.0, 0.0, 0.0, 1.0])
         glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, [0.05, 0.05, 0.05, 1.0])
         glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0, 1.0, 1.0, 1.0])
         glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 80.0)
 
+        # Face frontal (z = +thickness/2)
         glNormal3f(0.0, 0.0, 1.0)
         glBegin(GL_POLYGON)
         for vx, vy in self.vertices:
-            glVertex3f(vx, vy, 0.0)
+            glVertex3f(vx, vy, thickness / 2)
         glEnd()
 
-        # Contorno neon (ignora iluminação pra cor ficar pura)
+        # Face traseira (z = -thickness/2, winding invertido)
+        glNormal3f(0.0, 0.0, -1.0)
+        glBegin(GL_POLYGON)
+        for vx, vy in reversed(self.vertices):
+            glVertex3f(vx, vy, -thickness / 2)
+        glEnd()
+
+        # Faces laterais (quads entre arestas frontais e traseiras)
+        for i in range(n):
+            v1 = self.vertices[i]
+            v2 = self.vertices[(i + 1) % n]
+            # Normal da face lateral: perpendicular à aresta no plano XY
+            edge_x, edge_y = v2[0] - v1[0], v2[1] - v1[1]
+            nx, ny = edge_y, -edge_x
+            length = math.sqrt(nx * nx + ny * ny)
+            if length > 0:
+                nx, ny = nx / length, ny / length
+            glNormal3f(nx, ny, 0.0)
+            glBegin(GL_QUADS)
+            glVertex3f(v1[0], v1[1], thickness / 2)
+            glVertex3f(v2[0], v2[1], thickness / 2)
+            glVertex3f(v2[0], v2[1], -thickness / 2)
+            glVertex3f(v1[0], v1[1], -thickness / 2)
+            glEnd()
+
+        # Wireframe neon na face frontal
         glDisable(GL_LIGHTING)
         glColor3fv(self.color)
         glBegin(GL_LINE_LOOP)
         for vx, vy in self.vertices:
-            glVertex3f(vx, vy, 0.1)
+            glVertex3f(vx, vy, thickness / 2 + 0.1)
         glEnd()
         glEnable(GL_LIGHTING)
 
@@ -206,6 +247,66 @@ class Projectile:
         glEnd()
         glEnable(GL_LIGHTING)
         glPopMatrix()
+
+
+# ============================================================
+# STARFIELD — fundo 3D de estrelas para menus
+# ============================================================
+
+class Starfield:
+    """Fundo de estrelas 3D que se movem em direção ao jogador.
+    Usado nos estados de menu para dar profundidade à cena.
+    Cada estrela tem posição (x,y,z) e brilho. Z varia de -5 (longe)
+    a 1 (perto). Estrelas próximas são maiores e mais brilhantes.
+    Adapta-se ao redimensionamento da janela."""
+
+    def __init__(self, num_stars=200):
+        self.win_w = WIDTH
+        self.win_h = HEIGHT
+        self.stars = []
+        for _ in range(num_stars):
+            self.stars.append([
+                random.uniform(0, self.win_w),
+                random.uniform(0, self.win_h),
+                random.uniform(-5.0, 1.0),
+                random.uniform(0.2, 1.0),
+            ])
+
+    def resize(self, new_w, new_h):
+        """Reescala posições das estrelas para novo tamanho de janela."""
+        if new_w == self.win_w and new_h == self.win_h:
+            return
+        sx = new_w / max(self.win_w, 1)
+        sy = new_h / max(self.win_h, 1)
+        for s in self.stars:
+            s[0] *= sx
+            s[1] *= sy
+        self.win_w = new_w
+        self.win_h = new_h
+
+    def update(self, dt):
+        """Move estrelas em direção à câmera. Ao passar da tela, recicla ao fundo."""
+        for s in self.stars:
+            s[2] += dt * 0.8
+            if s[2] > 1.0:
+                s[2] = -5.0
+                s[0] = random.uniform(0, self.win_w)
+                s[1] = random.uniform(0, self.win_h)
+
+    def draw(self):
+        """Desenha pontos 3D com tamanho e alpha baseados na profundidade Z."""
+        glDisable(GL_LIGHTING)
+        glEnable(GL_POINT_SMOOTH)
+        for s in self.stars:
+            t = (s[2] + 5.0) / 6.0          # 0=fundo, 1=frente
+            alpha = t * s[3]
+            size = 1.0 + t * 2.5
+            glPointSize(size)
+            glColor4f(1.0, 1.0, 1.0, max(0.05, alpha))
+            glBegin(GL_POINTS)
+            glVertex3f(s[0], s[1], s[2])
+            glEnd()
+        glDisable(GL_POINT_SMOOTH)
 
 
 # ============================================================
@@ -391,6 +492,7 @@ class GameApp:
 
         glfw.make_context_current(self.window)
         glfw.set_key_callback(self.window, self.key_callback)
+        glfw.set_window_size_callback(self.window, self.window_size_callback)
         glfw.swap_interval(1)  # VSync
 
         # Configurações globais do OpenGL
@@ -430,6 +532,9 @@ class GameApp:
 
         self.high_scores = load_high_scores()
         self.player_name = ""
+
+        self.starfield = Starfield()
+        self.start_time = glfw.get_time()
 
         self.reset_game()
         self.game_state = "MENU"
@@ -555,35 +660,85 @@ class GameApp:
         glDeleteTextures(1, [tex_id])
         return width * self.text_scale
 
-    def draw_texture(self, tex_id, x, y, width, height):
-        """Desenha um quad texturizado na posição (x,y).
-        Coordenadas de textura Y invertidas porque pygame vs OpenGL."""
+    def draw_texture(self, tex_id, x, y, width, height, z=0.0):
+        """Desenha um quad texturizado na posição (x,y,z).
+        Coordenadas de textura Y invertidas porque pygame vs OpenGL.
+        Parâmetro z opcional para camadas de profundidade 3D."""
         glEnable(GL_TEXTURE_2D)
         glBindTexture(GL_TEXTURE_2D, tex_id)
         glBegin(GL_QUADS)
         glTexCoord2f(0, 1)
-        glVertex2f(x, y)
+        glVertex3f(x, y, z)
         glTexCoord2f(1, 1)
-        glVertex2f(x + width, y)
+        glVertex3f(x + width, y, z)
         glTexCoord2f(1, 0)
-        glVertex2f(x + width, y + height)
+        glVertex3f(x + width, y + height, z)
         glTexCoord2f(0, 0)
-        glVertex2f(x, y + height)
+        glVertex3f(x, y + height, z)
         glEnd()
         glDisable(GL_TEXTURE_2D)
 
-    def draw_menu_cursor(self, x, y):
-        """Desenha seta (diamante virado) ao lado da opção selecionada."""
+    def draw_menu_cursor(self, x, y, elapsed):
+        """Cursor 3D: diamante extrudado que gira e pulsa.
+        Face frontal e traseira com TRIANGLE_FAN, outline neon.
+        Preserva estado de iluminação original."""
         glPushMatrix()
-        glTranslatef(x, y, 0)
-        glRotatef(90, 0, 0, 1)
-        glColor3f(0.0, 1.0, 0.8)
-        glBegin(GL_LINE_LOOP)
-        glVertex2f(0, -15)
-        glVertex2f(-10, 10)
-        glVertex2f(0, 5)
-        glVertex2f(10, 10)
+        glTranslatef(x, y, 0.0)
+        glRotatef(elapsed * 150, 0.0, 0.0, 1.0)
+        glRotatef(20 + math.sin(elapsed * 2.5) * 8, 1.0, 0.0, 0.0)
+
+        s = 12.0
+        d = s * 0.4
+        alpha = 0.5 + math.sin(elapsed * 3.5) * 0.3
+
+        lighting_was_on = glIsEnabled(GL_LIGHTING)
+        glDisable(GL_LIGHTING)
+
+        # Face frontal
+        glColor4f(0.0, 1.0, 0.8, alpha)
+        glBegin(GL_TRIANGLE_FAN)
+        glVertex3f(-s, 0.0, d)
+        glVertex3f(0.0, -s * 0.7, 0.0)
+        glVertex3f(s, 0.0, 0.0)
+        glVertex3f(0.0, s * 0.7, 0.0)
+        glVertex3f(0.0, -s * 0.7, 0.0)
         glEnd()
+
+        # Face traseira
+        glColor4f(0.0, 0.6, 0.5, alpha * 0.5)
+        glBegin(GL_TRIANGLE_FAN)
+        glVertex3f(-s, 0.0, -d)
+        glVertex3f(0.0, s * 0.7, 0.0)
+        glVertex3f(s, 0.0, 0.0)
+        glVertex3f(0.0, -s * 0.7, 0.0)
+        glVertex3f(0.0, s * 0.7, 0.0)
+        glEnd()
+
+        # Lado direito
+        glColor4f(0.0, 0.8, 0.6, alpha * 0.7)
+        glBegin(GL_TRIANGLES)
+        glVertex3f(s, 0.0, d)
+        glVertex3f(0.0, -s * 0.7, 0.0)
+        glVertex3f(0.0, s * 0.7, 0.0)
+        glEnd()
+        glColor4f(0.0, 0.5, 0.4, alpha * 0.4)
+        glBegin(GL_TRIANGLES)
+        glVertex3f(s, 0.0, -d)
+        glVertex3f(0.0, s * 0.7, 0.0)
+        glVertex3f(0.0, -s * 0.7, 0.0)
+        glEnd()
+
+        # Wireframe outline
+        glColor4f(0.0, 1.0, 0.8, 1.0)
+        glBegin(GL_LINE_LOOP)
+        glVertex3f(-s, 0.0, 0.0)
+        glVertex3f(0.0, -s * 0.7, 0.0)
+        glVertex3f(s, 0.0, 0.0)
+        glVertex3f(0.0, s * 0.7, 0.0)
+        glEnd()
+
+        if lighting_was_on:
+            glEnable(GL_LIGHTING)
         glPopMatrix()
 
     def process_death(self):
@@ -601,6 +756,11 @@ class GameApp:
             self.game_state = "NAME_INPUT"
         else:
             self.game_state = "GAME_OVER"
+
+    def window_size_callback(self, window, width, height):
+        """Callback GLFW para redimensionamento. Re-escala starfield."""
+        if width > 0 and height > 0:
+            self.starfield.resize(width, height)
 
     def key_callback(self, window, key, scancode, action, mods):
         """Callback GLFW para eventos de teclado.
@@ -713,57 +873,27 @@ class GameApp:
             glClearColor(0.02, 0.02, 0.05, 1.0)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-            # Fundo: asteroides desenhados em TODOS os estados
-            # No MENU e GAME_OVER ficam parados (não chama update)
-            glDisable(GL_LIGHTING)
-            for asteroid in self.asteroids:
-                if self.game_state == "PLAYING":
-                    asteroid.update(win_w, win_h, dt_mult)
-                asteroid.draw()
-
-            if self.game_state == "MENU":
-                glDisable(GL_LIGHTING)
-                glColor3f(1.0, 1.0, 1.0)
-                tw, th = self.title_size
-                draw_tw, draw_th = tw * self.text_scale, th * self.text_scale
-                self.draw_texture(
-                    self.title_tex,
-                    (win_w - draw_tw) / 2,
-                    win_h / 4 - draw_th,
-                    draw_tw,
-                    draw_th,
-                )
-
-                for i, (norm_tex, high_tex, size) in enumerate(self.option_textures):
-                    ow, oh = size
-                    draw_ow, draw_oh = ow * self.text_scale, oh * self.text_scale
-                    x = (win_w - draw_ow) / 2
-                    y = win_h / 2 + (i * 80)
-
-                    if i == self.selected_option:
-                        self.draw_texture(high_tex, x, y - draw_oh, draw_ow, draw_oh)
-                        self.draw_menu_cursor(x - 40, y - (draw_oh / 2))
-                    else:
-                        self.draw_texture(norm_tex, x, y - draw_oh, draw_ow, draw_oh)
-
-            elif self.game_state == "PLAYING":
+            # =====================================================
+            # FASE 1: LÓGICA DE JOGO (PLAYING apenas)
+            # =====================================================
+            if self.game_state == "PLAYING":
                 self.handle_gameplay_input(dt_mult)
                 self.player_ship.update(win_w, win_h, dt_mult)
 
-                # Remove projéteis que saíram da tela (update retorna False)
                 self.projectiles = [
                     p for p in self.projectiles if p.update(win_w, win_h, dt_mult)
                 ]
 
-                # Dificuldade aumenta com o tempo: multiplicador sobe, spawn acelera
                 self.difficulty_multiplier += dt * 0.015
                 self.spawn_timer -= dt
                 if self.spawn_timer <= 0:
                     self.spawn_timer = max(0.5, 4.0 / self.difficulty_multiplier)
                     self.spawn_new_asteroid(win_w, win_h)
 
-                # Colisão projétil ↔ asteroide: itera sobre cópias [:] das listas
-                # porque podemos remover elementos durante a iteração
+                for asteroid in self.asteroids:
+                    asteroid.update(win_w, win_h, dt_mult)
+
+                # Colisão projétil ↔ asteroide
                 for p in self.projectiles[:]:
                     for a in self.asteroids[:]:
                         if check_collision(p.x, p.y, p.radius, a.x, a.y, a.radius):
@@ -771,8 +901,7 @@ class GameApp:
                                 self.projectiles.remove(p)
                             if a in self.asteroids:
                                 self.asteroids.remove(a)
-                                self.asteroids.extend(a.split())  # Divide se size>1
-                                # Pontuação por tamanho: grande=50, médio=100, pequeno=200
+                                self.asteroids.extend(a.split())
                                 if a.size == 3:
                                     self.score += 50
                                 elif a.size == 2:
@@ -793,8 +922,92 @@ class GameApp:
                     ):
                         self.process_death()
 
-                # Iluminação 3D: luz na posição da nave, depth test pra nave
+            # =====================================================
+            # FASE 2: STARFIELD (todos os estados)
+            # =====================================================
+            self.starfield.update(dt)
+            self.starfield.draw()
+
+            # =====================================================
+            # FASE 3: ILUMINAÇÃO 3D (todos os estados)
+            # =====================================================
+            if self.game_state == "PLAYING":
                 self.setup_lighting(self.player_ship.x, self.player_ship.y)
+            else:
+                self.setup_lighting(win_w / 2, win_h / 2)
+
+            # =====================================================
+            # FASE 4: ASTEROIDES 3D (todos os estados)
+            # =====================================================
+            glEnable(GL_DEPTH_TEST)
+            for asteroid in self.asteroids:
+                asteroid.draw()
+            if self.game_state != "PLAYING":
+                glDisable(GL_DEPTH_TEST)
+
+            # =====================================================
+            # FASE 5: UI POR ESTADO
+            # =====================================================
+            elapsed = glfw.get_time() - self.start_time
+
+            if self.game_state == "MENU":
+                glDisable(GL_LIGHTING)
+
+                # Título com sombra 3D (camadas em Z)
+                pulse = 1.0 + math.sin(elapsed * 2.0) * 0.02
+                tw, th = self.title_size
+                draw_tw = tw * self.text_scale * pulse
+                draw_th = th * self.text_scale * pulse
+                title_x = (win_w - draw_tw) / 2
+                title_y = win_h / 4 - draw_th
+
+                # Camadas de sombra (trás pra frente)
+                glColor4f(0.0, 0.3, 0.5, 0.35)
+                self.draw_texture(
+                    self.title_tex, title_x + 4, title_y + 4,
+                    draw_tw, draw_th, z=-0.6,
+                )
+                glColor4f(0.0, 0.6, 0.8, 0.6)
+                self.draw_texture(
+                    self.title_tex, title_x + 2, title_y + 2,
+                    draw_tw, draw_th, z=-0.3,
+                )
+                # Camada principal
+                glColor3f(1.0, 1.0, 1.0)
+                self.draw_texture(
+                    self.title_tex, title_x, title_y, draw_tw, draw_th,
+                )
+
+                # Opções do menu
+                for i, (norm_tex, high_tex, size) in enumerate(self.option_textures):
+                    ow, oh = size
+                    draw_ow = ow * self.text_scale
+                    draw_oh = oh * self.text_scale
+                    x = (win_w - draw_ow) / 2
+                    y = win_h / 2 + (i * 80)
+
+                    if i == self.selected_option:
+                        # Opção selecionada: tilt 3D sutil
+                        glPushMatrix()
+                        cx, cy = x + draw_ow / 2, y - draw_oh / 2
+                        glTranslatef(cx, cy, 0.0)
+                        wobble = math.sin(elapsed * 3.0) * 4.0
+                        glRotatef(wobble, 0.0, 1.0, 0.0)
+                        glTranslatef(-cx, -cy, 0.0)
+                        self.draw_texture(
+                            high_tex, x, y - draw_oh, draw_ow, draw_oh,
+                        )
+                        glPopMatrix()
+                        self.draw_menu_cursor(
+                            x - 40, y - (draw_oh / 2), elapsed,
+                        )
+                    else:
+                        self.draw_texture(
+                            norm_tex, x, y - draw_oh, draw_ow, draw_oh,
+                        )
+
+            elif self.game_state == "PLAYING":
+                glClear(GL_DEPTH_BUFFER_BIT)
                 glEnable(GL_DEPTH_TEST)
                 self.player_ship.draw()
                 glDisable(GL_DEPTH_TEST)
