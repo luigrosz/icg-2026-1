@@ -92,22 +92,12 @@ class Asteroid:
         self.rotation = random.uniform(0, 360)
         self.rot_speed = random.uniform(-2, 2) * speed_mult
 
-        # Eixo de rotação 3D aleatório (vetor unitário)
-        axis_angle = random.uniform(0, 2 * math.pi)
-        axis_z = random.uniform(-1.0, 1.0)
-        axis_r = math.sqrt(1.0 - axis_z * axis_z)
-        self.rot_axis = (
-            math.cos(axis_angle) * axis_r,
-            math.sin(axis_angle) * axis_r,
-            axis_z,
-        )
-
         # Raio de colisão (85% do raio visual pra dar folga)
         self.base_radius = size * 20
         self.radius = self.base_radius * 0.85
 
-        # Gera entre 8 e 14 vértices em círculo com ruído no raio
-        num_points = random.randint(8, 14)
+        # Polígono irregular: 10-16 vértices com variação de raio 0.7-1.3
+        num_points = random.randint(10, 16)
         self.vertices = []
         for i in range(num_points):
             angle = (i / num_points) * 2 * math.pi
@@ -142,65 +132,52 @@ class Asteroid:
             self.y = -100
 
     def draw(self):
-        """Desenha asteroide 3D extrudado:
-        1. Face frontal e traseira com normais em Z
-        2. Faces laterais (quads) conectando frente e trás
-        3. Wireframe neon na face frontal
-        Espessura proporcional ao base_radius (30%)."""
+        """Asteroide com efeito 3D via drop-shadow: face escura offset
+        em XY (como sombra projetada) + face clara + wireframe neon.
+        Sem OpenGL lighting — cores planas e previsíveis."""
         glPushMatrix()
         glTranslatef(self.x, self.y, 0.0)
-        glRotatef(self.rotation, *self.rot_axis)
+        glRotatef(self.rotation, 0, 0, 1)
 
-        thickness = self.base_radius * 0.3
-        n = len(self.vertices)
+        r, g, b = self.color
+        shadow_dx = self.base_radius * 0.15
+        shadow_dy = self.base_radius * 0.10
 
-        # Material rochoso escuro com brilho especular
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, [0.0, 0.0, 0.0, 1.0])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, [0.05, 0.05, 0.05, 1.0])
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [1.0, 1.0, 1.0, 1.0])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 80.0)
+        # Salva estado OpenGL
+        lighting_was_on = glIsEnabled(GL_LIGHTING)
+        depth_was_on = glIsEnabled(GL_DEPTH_TEST)
 
-        # Face frontal (z = +thickness/2)
-        glNormal3f(0.0, 0.0, 1.0)
+        glDisable(GL_LIGHTING)
+        glDisable(GL_DEPTH_TEST)
+
+        # Face escura (sombra) — offset em XY, atrás em Z
+        glColor4f(r * 0.15, g * 0.15, b * 0.15, 0.85)
         glBegin(GL_POLYGON)
         for vx, vy in self.vertices:
-            glVertex3f(vx, vy, thickness / 2)
+            glVertex3f(vx + shadow_dx, vy + shadow_dy, -0.3)
         glEnd()
 
-        # Face traseira (z = -thickness/2, winding invertido)
-        glNormal3f(0.0, 0.0, -1.0)
+        # Face clara (corpo principal) — posição original
+        glColor4f(r * 0.65, g * 0.65, b * 0.65, 0.95)
         glBegin(GL_POLYGON)
-        for vx, vy in reversed(self.vertices):
-            glVertex3f(vx, vy, -thickness / 2)
+        for vx, vy in self.vertices:
+            glVertex3f(vx, vy, 0.0)
         glEnd()
 
-        # Faces laterais (quads entre arestas frontais e traseiras)
-        for i in range(n):
-            v1 = self.vertices[i]
-            v2 = self.vertices[(i + 1) % n]
-            # Normal da face lateral: perpendicular à aresta no plano XY
-            edge_x, edge_y = v2[0] - v1[0], v2[1] - v1[1]
-            nx, ny = edge_y, -edge_x
-            length = math.sqrt(nx * nx + ny * ny)
-            if length > 0:
-                nx, ny = nx / length, ny / length
-            glNormal3f(nx, ny, 0.0)
-            glBegin(GL_QUADS)
-            glVertex3f(v1[0], v1[1], thickness / 2)
-            glVertex3f(v2[0], v2[1], thickness / 2)
-            glVertex3f(v2[0], v2[1], -thickness / 2)
-            glVertex3f(v1[0], v1[1], -thickness / 2)
-            glEnd()
-
-        # Wireframe neon na face frontal
-        glDisable(GL_LIGHTING)
+        # Wireframe neon na face clara
         glColor3fv(self.color)
+        glLineWidth(2.5)
         glBegin(GL_LINE_LOOP)
         for vx, vy in self.vertices:
-            glVertex3f(vx, vy, thickness / 2 + 0.1)
+            glVertex3f(vx, vy, 0.1)
         glEnd()
-        glEnable(GL_LIGHTING)
 
+        # Restaura estado OpenGL
+        if lighting_was_on:
+            glEnable(GL_LIGHTING)
+        if depth_was_on:
+            glEnable(GL_DEPTH_TEST)
+        glLineWidth(2.0)
         glPopMatrix()
 
 
